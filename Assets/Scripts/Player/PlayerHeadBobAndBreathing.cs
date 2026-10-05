@@ -1,93 +1,198 @@
-using Unity.VisualScripting;
-using UnityEditor.Experimental.GraphView;
 using UnityEngine;
+using UnityEngine.UI;
 
-public class PlayerHeadBobAndBreathing : MonoBehaviour
+public class PlayerStaminaAndHealth : MonoBehaviour
 {
-    [Header("Breathing Settings")]
-    public float idleBreathSpeed = 2f;
-    public float idleBreathAmount = 0.02f;
+    [Header("Health Settings")]
+    public float maxHealth = 100f;
+    public float currentHealth;
+    public float severeInjuryThreshold = 25f; // Critical health threshold for limping
+    public bool isSeverelyInjured { get; private set; }
 
-    [Header("Head Bob Settings")]
-    public float walkBobSpeed = 12f;
-    public float walkBobAmount = 0.05f;
-    public float runBobSpeed = 18f;
-    public float runBobAmount = 0.1f;
-    public float crouchBobSpeed = 8f;
-    public float crouchBobAmount = 0.025f;
+    [Header("Blood Vignette UI Overlay")]
+    public Image bloodOverlayImage;
+    public float bloodFadeSpeed = 3f; // Speed at which blood overlay fades in or out
 
-    private float timer = 0f;
-    private Vector3 initialLocalPosition;
-    private PlayerController playerController;
-    private PlayerHealthAndStamina staminaSystem;
+    [Header("Hit Impact Flash Effect")]
+    [Tooltip("Extra flash intensity added to overlay when taking damage.")]
+    public float impactFlashIntensity = 0.5f;
+    [Tooltip("How fast the hit flash decays down to the baseline health vignette.")]
+    public float impactDecaySpeed = 4f;
 
-    // Start is called once before the first execution of Update after the MonoBehaviour is created
-    void Start()
+    [Header("Stamina Settings")]
+    public float maxStamina = 100f;
+    public float currentStamina;
+    public float staminaDrainRate = 20f;
+    public float staminaRegenRate = 15f;
+    public bool isExhausted { get; private set; }
+
+    [Header("Fatigue UI Overlay")]
+    public CanvasGroup fatigueBlurGroup;
+
+    [Header("Audio")]
+    public AudioSource breathingAudioSource;
+    public AudioSource hurtAudioSource;
+    public AudioClip heavyBreathingClip;
+    public AudioClip heartBeatSound;
+    public AudioClip[] hurtImpactClips;
+
+    private PlayerController movementController;
+    private float targetBloodAlpha = 0f;
+    private float currentHitFlashAlpha = 0f;
+
+    private void Awake()
     {
-        initialLocalPosition = transform.localPosition;
-        playerController = GetComponentInParent<PlayerController>();
-        staminaSystem = GetComponentInParent<PlayerHealthAndStamina>();
+        currentHealth = maxHealth;
+        currentStamina = maxStamina;
+        movementController = GetComponent<PlayerController>();
     }
 
-    // Update is called once per frame
-    void Update()
+    private void Update()
     {
-        ApplyHeadBobAndBreathing();
+        HandleStamina();
+        CheckInjuryState();
+        UpdateBloodOverlay();
+        UpdateFatigueAndAudioOverlays();
     }
 
-    private void ApplyHeadBobAndBreathing()
+    private void CheckInjuryState()
     {
-        if (playerController == null) return;
+        // Player is severely injured when health falls below threshold
+        isSeverelyInjured = (currentHealth <= severeInjuryThreshold && currentHealth > 0f);
+    }
 
-        float speed = 0f;
-        float amount = 0f;
+    // --- Combined Persistent + Hit Flash Overlay Logic ---
+    private void UpdateBloodOverlay()
+    {
+        if (bloodOverlayImage == null) return;
 
-        // Determine motion intensity
-        if (!playerController.IsGrounded)
+        // 1. Calculate baseline target alpha based on missing health percentage
+        float missingHealthRatio = 1f - Mathf.Clamp01(currentHealth / maxHealth);
+
+        if (isSeverelyInjured)
         {
-            // freeze bobbing mid air
-            speed = 0f;
-            amount = 0f;
+            targetBloodAlpha = Mathf.Max(missingHealthRatio, 0.6f);
         }
-        else if (playerController.IsMoving)
+        else
         {
-            if (playerController.IsCrouching)
+            targetBloodAlpha = missingHealthRatio;
+        }
+
+        // 2. Decay the hit impact flash down toward zero over time
+        if (currentHitFlashAlpha > 0f)
+        {
+            currentHitFlashAlpha = Mathf.MoveTowards(currentHitFlashAlpha, 0f, Time.deltaTime * impactDecaySpeed);
+        }
+
+        // 3. Combine baseline health alpha with hit impact flash alpha (capped at 1.0)
+        float totalTargetAlpha = Mathf.Clamp01(targetBloodAlpha + currentHitFlashAlpha);
+
+        // 4. Smoothly lerp overlay color
+        Color currentColor = bloodOverlayImage.color;
+        float newAlpha = Mathf.Lerp(currentColor.a, totalTargetAlpha, Time.deltaTime * bloodFadeSpeed);
+
+        bloodOverlayImage.color = new Color(currentColor.r, currentColor.g, currentColor.b, newAlpha);
+    }
+
+    // --- Damage Routine ---
+    public void TakeDamage(float damageAmount)
+    {
+        if (currentHealth <= 0f) return;
+
+        currentHealth -= damageAmount;
+
+        // Trigger immediate hit flash effect proportional to damage taken
+        float damageRatio = Mathf.Clamp01(damageAmount / maxHealth);
+        currentHitFlashAlpha = Mathf.Clamp01(currentHitFlashAlpha + impactFlashIntensity + (damageRatio * 0.5f));
+
+        // Play hurt audio impact cue
+        if (hurtAudioSource != null && hurtImpactClips != null && hurtImpactClips.Length > 0)
+        {
+            AudioClip clip = hurtImpactClips[Random.Range(0, hurtImpactClips.Length)];
+            hurtAudioSource.PlayOneShot(clip);
+        }
+
+        if (currentHealth <= 0f)
+        {
+            currentHealth = 0f;
+            Die();
+        }
+    }
+
+    // --- Medkit Healing Routine ---
+    public bool UseMedkit(float healAmount)
+    {
+        if (currentHealth >= maxHealth)
+        {
+            Debug.Log("Health is already full.");
+            return false; // Medkit not consumed
+        }
+
+        currentHealth = Mathf.Min(currentHealth + healAmount, maxHealth);
+        Debug.Log($"Medkit consumed! Restored {healAmount} HP. Current Health: {currentHealth}");
+
+        // Check injury state immediately so movement penalties drop if healed above threshold
+        CheckInjuryState();
+
+        return true; // Medkit successfully consumed
+    }
+
+    private void HandleStamina()
+    {
+        if (movementController != null && movementController.IsSprinting && movementController.IsMoving)
+        {
+            currentStamina -= staminaDrainRate * Time.deltaTime;
+            if (currentStamina <= 0f)
             {
-                speed = crouchBobSpeed;
-                amount = crouchBobAmount;
-            }
-            else if (playerController.IsSprinting)
-            {
-                speed = runBobSpeed;
-                amount = runBobAmount;
-            }
-            else
-            {
-                speed = walkBobSpeed;
-                amount = walkBobAmount;
+                currentStamina = 0f;
+                isExhausted = true;
             }
         }
         else
         {
-            // Idle Breathing Logic (Faster/Heavy when stamina is low
-            float staminaRatio = (staminaSystem != null) ? (staminaSystem.currentStamina / staminaSystem.maxStamina) : 1f;
-            speed = Mathf.Lerp(idleBreathSpeed * 2.5f, idleBreathSpeed, staminaRatio);
-            amount = Mathf.Lerp(idleBreathAmount * 2f, idleBreathAmount, staminaRatio);
+            if (currentStamina < maxStamina)
+            {
+                currentStamina += staminaRegenRate * Time.deltaTime;
+                if (currentStamina >= 25f)
+                {
+                    isExhausted = false;
+                }
+            }
+        }
+    }
+
+    private void UpdateFatigueAndAudioOverlays()
+    {
+        // Low Stamina Blur
+        if (fatigueBlurGroup != null)
+        {
+            float staminaPercent = currentStamina / maxStamina;
+            float targetBlurAlpha = (staminaPercent < 0.3f) ? Mathf.InverseLerp(0.3f, 0f, staminaPercent) : 0f;
+            fatigueBlurGroup.alpha = Mathf.Lerp(fatigueBlurGroup.alpha, targetBlurAlpha, Time.deltaTime * 4f);
         }
 
-        if (playerController.IsMoving && playerController.IsGrounded)
+        // Breathing Cues
+        if (breathingAudioSource != null)
         {
-            timer += Time.deltaTime * speed;
-            float newY = initialLocalPosition.y + Mathf.Sin(timer) * amount;
-            float newX = initialLocalPosition.x + Mathf.Cos(timer * 0.5f) * amount;
-            transform.localPosition = new Vector3(newX, newY, initialLocalPosition.z);
+            if (!breathingAudioSource.isPlaying) breathingAudioSource.Play();
+
+            float targetVolume = (isExhausted || isSeverelyInjured) ? 0.9f : Mathf.Lerp(0.1f, 0.6f, 1f - (currentStamina / maxStamina));
+            breathingAudioSource.volume = Mathf.Lerp(breathingAudioSource.volume, targetVolume, Time.deltaTime * 3f);
         }
-        else
+    }
+
+    private void Die()
+    {
+        if (bloodOverlayImage != null)
         {
-            // Idle breathing Cycle
-            timer += Time.deltaTime * speed;
-            float newY = initialLocalPosition.y + Mathf.Sin(timer) * amount;
-            transform.localPosition = Vector3.Lerp(transform.localPosition, new Vector3(initialLocalPosition.x, newY, initialLocalPosition.z), Time.deltaTime * 4f);
+            bloodOverlayImage.color = new Color(1f, 0f, 0f, 1f);
         }
+
+        if (movementController != null)
+        {
+            movementController.enabled = false;
+        }
+
+        Debug.Log("Player has died.");
     }
 }

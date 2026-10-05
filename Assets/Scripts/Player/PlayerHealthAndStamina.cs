@@ -8,6 +8,8 @@ public class PlayerHealthAndStamina : MonoBehaviour
     [Header("Health Settings")]
     public float maxHealth = 100f;
     public float currentHealth;
+    public float severeInjuryThreshold = 25f;   // Critical health threshold for limping
+    public bool isSeverlyInjured { get; private set;  }
 
     [Header("Stamina Settings")]
     public float maxStamina = 100f;
@@ -23,6 +25,7 @@ public class PlayerHealthAndStamina : MonoBehaviour
     [Header("Audio")]
     public AudioSource breathingAudioSource;
     public AudioClip HeavyBreathingClip;
+    public AudioClip heartBeatSound;
 
     private PlayerController movementController;
 
@@ -43,7 +46,14 @@ public class PlayerHealthAndStamina : MonoBehaviour
     void Update()
     {
         HandleStamina();
+        CheckInjuryState();
         UpdateUIOvelays();
+    }
+
+    private void CheckInjuryState()
+    {
+        // Player is severly injured when health falls below threshold
+        isSeverlyInjured = (currentHealth <= severeInjuryThreshold && currentHealth > 0f);
     }
 
     private void HandleStamina()
@@ -113,6 +123,18 @@ public class PlayerHealthAndStamina : MonoBehaviour
             currentHealth = 0f;
             Die();
         }
+    }
+
+    // --- Medkit Healing System ---
+    public bool UseMedkit (float healAmount)
+    {
+        if (currentHealth >= maxHealth)
+        {
+            return false;
+        }
+
+        currentHealth = Mathf.Min(currentHealth + healAmount, maxHealth);
+        return true;
     }
 
     private void Die()
