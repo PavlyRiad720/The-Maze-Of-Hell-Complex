@@ -14,6 +14,8 @@ public class CameraAspectRatioController : MonoBehaviour
     private Rect originalViewportRect;
     private bool isAspectLocked = false;
 
+    public bool IsAspectLocked => isAspectLocked;
+
     private void Awake()
     {
         if (targetCamera == null)

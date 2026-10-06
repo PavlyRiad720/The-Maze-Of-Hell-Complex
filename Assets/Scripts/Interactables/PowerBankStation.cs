@@ -17,6 +17,7 @@ public class PowerBankStation : MonoBehaviour, IDoorInteractable
         }
 
         SmartphoneController phone = FindFirstObjectByType<SmartphoneController>();
+
         if (phone != null)
         {
             // Attach power bank directly to phone
@@ -35,5 +36,4 @@ public class PowerBankStation : MonoBehaviour, IDoorInteractable
             Debug.Log("Took Power Bank from station.");
         }
     }
-}
 }
